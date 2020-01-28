@@ -1,5 +1,8 @@
 [![TravisCI](https://travis-ci.org/mpromonet/v4l2rtspserver.png)](https://travis-ci.org/mpromonet/v4l2rtspserver)
 [![CircleCI](https://circleci.com/gh/mpromonet/v4l2rtspserver.svg?style=shield)](https://circleci.com/gh/mpromonet/v4l2rtspserver)
+[![CirusCI](https://api.cirrus-ci.com/github/mpromonet/v4l2rtspserver.svg?branch=master)](https://cirrus-ci.com/github/mpromonet/v4l2rtspserver)
+[![Snap Status](https://build.snapcraft.io/badge/mpromonet/v4l2rtspserver.svg)](https://build.snapcraft.io/user/mpromonet/v4l2rtspserver)
+[![GithubCI](https://github.com/mpromonet/v4l2rtspserver/workflows/C/C++%20CI/badge.svg)](https://github.com/mpromonet/v4l2rtspserver/actions)
 
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/aa0c28514aa843ea9fa7da358d905871)](https://www.codacy.com/app/michelpromonet_2643/v4l2rtspserver?utm_source=github.com&utm_medium=referral&utm_content=mpromonet/v4l2rtspserver&utm_campaign=badger)
 [![Coverity Scan Build Status](https://scan.coverity.com/projects/4644/badge.svg)](https://scan.coverity.com/projects/4644)
@@ -7,7 +10,7 @@
 
 [![Release](https://img.shields.io/github/release/mpromonet/v4l2rtspserver.svg)](https://github.com/mpromonet/v4l2rtspserver/releases/latest)
 [![Download](https://img.shields.io/github/downloads/mpromonet/v4l2rtspserver/total.svg)](https://github.com/mpromonet/v4l2rtspserver/releases/latest)
-
+[![Docker Pulls](https://img.shields.io/docker/pulls/mpromonet/v4l2rtspserver.svg)](https://hub.docker.com/r/mpromonet/v4l2rtspserver/)
 
 v4l2rtspserver
 ====================
@@ -31,6 +34,9 @@ Dependencies
  - liblivemedia-dev [License LGPL](http://www.live555.com/liveMedia/) > live.2012.01.07 (need StreamReplicator)
  - libv4l2cpp [Unlicense](https://github.com/mpromonet/libv4l2cpp/blob/master/LICENSE)
  - liblog4cpp5-dev  [License LGPL](http://log4cpp.sourceforge.net/#license) (optional)
+If liblog4cpp5-dev is not present, a simple log using std::cout is used.
+ - libasound2-dev Licence LGPL (optional)
+If libasound2-dev is not present in the build environment, there will have no audio support.
 
 Usage
 -----
@@ -53,18 +59,19 @@ Usage
 		 -M addr  : multicast group:port (default is random_address:20000)
 		 -c       : don't repeat config (default repeat config before IDR frame)
 		 -t secs  : RTCP expiration timeout (default 65)
-		 -T       : send Transport Stream instead of elementary Stream
 		 -S[secs] : HTTP segment duration (enable HLS & MPEG-DASH)
 		 
 		 V4L2 options :
 		 -r       : V4L2 capture using read interface (default use memory mapped buffers)
 		 -w       : V4L2 capture using write interface (default use memory mapped buffers)
+                 -B       : V4L2 capture using blocking mode (default use non-blocking mode)
 		 -s       : V4L2 capture using live555 mainloop (default use a separated reading thread)
 		 -f       : V4L2 capture using current capture format (-W,-H are ignored)
 		 -fformat : V4L2 capture using format (-W,-H are used)
 		 -W width : V4L2 capture width (default 640)
 		 -H height: V4L2 capture height (default 480)
 		 -F fps   : V4L2 capture framerate (default 25, 0 disable setting framerate)
+		 -G <w>x<h>[x<f>] : V4L2 capture format (default 0x0x25)
 		 
 		 ALSA options :
 		 -A freq    : ALSA capture frequency and channel (default 44100)
@@ -72,6 +79,8 @@ Usage
 		 -a fmt     : ALSA capture audio format (default S16_LE)
 		 
 		 device   : V4L2 capture device and/or ALSA device (default /dev/video0)
+
+When audio support is not present, ALSA options are not printed running with `-h` argument.
 
 Authentification is enable when almost one user is defined. You can configure credentials :
  * using plain text password: 
@@ -109,12 +118,13 @@ Build
 Using Raspberry Pi Camera
 ------------------------- 
 This RTSP server works with Raspberry Pi camera using :
-- the unofficial V4L2 driver for the Raspberry Pi Camera Module http://www.linux-projects.org/uv4l/
-
-	sudo uv4l --driver raspicam --auto-video_nr --encoding h264
-- the official V4L2 driver bcm2835-v4l2
+- the opensource V4L2 driver bcm2835-v4l2
 
 	sudo modprobe -v bcm2835-v4l2
+	
+- the closed source V4L2 driver for the Raspberry Pi Camera Module http://www.linux-projects.org/uv4l/
+
+	sudo uv4l --driver raspicam --auto-video_nr --encoding h264
 
 Using v4l2loopback
 ----------------------- 
@@ -166,4 +176,4 @@ The container entry point is the v4l2rtspserver application, then you can :
 
 * run the container specifying some paramters :
 
-        docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -u "" -H640 -H480 
+        docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -u "" -H640 -W480 

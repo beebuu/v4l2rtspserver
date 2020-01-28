@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.0)
 
-# set project name from current directory
-get_filename_component(BASENAME ${CMAKE_SOURCE_DIR} NAME)
-project(${BASENAME})
+project(v4l2rtspserver)
 
 option(COVERAGE "Coverage" OFF)
 
-set (CMAKE_CXX_STANDARD 11)
+set(ALSA ON CACHE BOOL "use ALSA is available")
+set(LIVE555URL http://live555.com/liveMedia/public/live555-latest.tar.gz CACHE STRING "live555 url")
+set(LIVE555CFLAGS -DBSD=1 -DSOCKLEN_T=socklen_t -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE=1 -DALLOW_RTSP_SERVER_PORT_REUSE=1 -DNO_OPENSSL=1 CACHE STRING "live555 CFGLAGS")
+
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS "-Wall")
-SET(CMAKE_FIND_ROOT_PATH "${CMAKE_SOURCE_DIR}/${CMAKE_SYSTEM_PROCESSOR}")
 
 # set version based on git
 find_package(Git)
@@ -35,72 +36,54 @@ endif()
 message(STATUS "CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
 message(STATUS "CMAKE_C_COMPILER=${CMAKE_C_COMPILER}")
 message(STATUS "CMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}")
-message(STATUS "CMAKE_FIND_ROOT_PATH=${CMAKE_FIND_ROOT_PATH}")
-
-# v4l2wrapper
-include_directories("v4l2wrapper/inc")
-find_library(V4L2WRAPPER_LIBRARY libv4l2wrapper.a)
-if (NOT V4L2WRAPPER_LIBRARY)
-        message(STATUS "Installing v4l2wrapper")
-        EXEC_PROGRAM("mkdir -p ${CMAKE_FIND_ROOT_PATH}/include/libv4l2cpp && mkdir -p ${CMAKE_FIND_ROOT_PATH}/lib")
-        EXEC_PROGRAM("git submodule init && git submodule update && make -C v4l2wrapper CC=${CMAKE_C_COMPILER} PREFIX=${CMAKE_FIND_ROOT_PATH} all install")
-	find_library(V4L2WRAPPER_LIBRARY libv4l2wrapper.a)
-        message(STATUS "v4l2wrapper built in V4L2WRAPPER_LIBRARY=${V4L2WRAPPER_LIBRARY}")	
-endif (NOT V4L2WRAPPER_LIBRARY)
-target_link_libraries(${PROJECT_NAME} ${V4L2WRAPPER_LIBRARY})
 
 #pthread
 find_package (Threads)
 target_link_libraries (${PROJECT_NAME} ${CMAKE_THREAD_LIBS_INIT}) 
 
 #ALSA
+if (ALSA)
 find_package(ALSA QUIET)
 if (ALSA_LIBRARY)
 	message(STATUS "Alsa available")
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_ALSA")
+	add_definitions(-DHAVE_ALSA)
         target_link_libraries (${PROJECT_NAME} ${ALSA_LIBRARY}) 
 	
 	SET(CPACK_DEBIAN_PACKAGE_DEPENDS ${CPACK_DEBIAN_PACKAGE_DEPENDS}libasound2-dev,)	
 endif (ALSA_LIBRARY)
+endif()
 
 # LOG4CPP
-find_path(LOG4CPP_INCLUDE_DIR log4cpp/Category.hh)
-if (LOG4CPP_INCLUDE_DIR)
+find_package(log4cpp QUIET)
+if (LOG4CPP_LIBRARY)
         message(STATUS "Log4Cpp available")
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LOG4CPP")
-	include_directories(${LOG4CPP_INCLUDE_DIR}) 
-
-	find_library(LOG4CPP_LIBRARY log4cpp)
+	add_definitions(-DHAVE_LOG4CPP)
 	target_link_libraries(${PROJECT_NAME} "${LOG4CPP_LIBRARY}")
 	
 	SET(CPACK_DEBIAN_PACKAGE_DEPENDS ${CPACK_DEBIAN_PACKAGE_DEPENDS}liblog4cpp5-dev,)
-endif (LOG4CPP_INCLUDE_DIR)
+endif ()
 
+# v4l2wrapper
+EXEC_PROGRAM("git submodule update --init")
+aux_source_directory(v4l2wrapper/src LIBSRC_FILES)
+include_directories("v4l2wrapper/inc")
+add_library(v4l2wrapper STATIC ${LIBSRC_FILES})
+target_link_libraries (${PROJECT_NAME} v4l2wrapper) 
 
 # live555
-find_path(LIBLIVE555_INCLUDE_DIR liveMedia/liveMedia.hh)
-if (NOT LIBLIVE555_INCLUDE_DIR)
-        message(STATUS "Installing live555")
-        EXEC_PROGRAM("wget http://www.live555.com/liveMedia/public/live555-latest.tar.gz -O - | tar xzf -")
-        EXEC_PROGRAM("cd live && ./genMakefiles linux-gdb && make CPLUSPLUS_COMPILER=${CMAKE_CXX_COMPILER} C_COMPILER=${CMAKE_C_COMPILER} LINK='${CMAKE_CXX_COMPILER} -o' CPPFLAGS=-DALLOW_RTSP_SERVER_PORT_REUSE=1 PREFIX=${CMAKE_FIND_ROOT_PATH} install")
-else (NOT LIBLIVE555_INCLUDE_DIR)
-	SET(CPACK_DEBIAN_PACKAGE_DEPENDS ${CPACK_DEBIAN_PACKAGE_DEPENDS}liblivemedia-dev,)
-endif (NOT LIBLIVE555_INCLUDE_DIR)
-
-find_path(LIBLIVE555_INCLUDE_DIR liveMedia/liveMedia.hh)
-foreach (LIBLIVE555_module groupsock liveMedia UsageEnvironment BasicUsageEnvironment)
-	include_directories(${LIBLIVE555_INCLUDE_DIR}/${LIBLIVE555_module}) 
-endforeach (LIBLIVE555_module)
-message(STATUS "live555 available '${LIBLIVE555_INCLUDE_DIR}'")
-
-set(LIBLIVE555_LIBRARIES "")
-foreach (LIBLIVE555_module groupsock liveMedia UsageEnvironment BasicUsageEnvironment)
-	find_library( ${LIBLIVE555_module}_LIBRARY ${LIBLIVE555_module} )
-	if ( ${LIBLIVE555_module}_LIBRARY )
-		set(LIBLIVE555_LIBRARIES ${LIBLIVE555_LIBRARIES} ${${LIBLIVE555_module}_LIBRARY})
-	endif ( ${LIBLIVE555_module}_LIBRARY )
-endforeach (LIBLIVE555_module)
-target_link_libraries(${PROJECT_NAME} ${LIBLIVE555_LIBRARIES})
+set(LIVE ${CMAKE_BINARY_DIR}/live)
+if (NOT EXISTS ${LIVE})
+    file (DOWNLOAD ${LIVE555URL} ${CMAKE_BINARY_DIR}/live555-latest.tar.gz )
+    EXECUTE_PROCESS(COMMAND ${CMAKE_COMMAND} -E tar xvf ${CMAKE_BINARY_DIR}/live555-latest.tar.gz  RESULT_VARIABLE unpack_result)
+    if(NOT unpack_result STREQUAL "0")
+        message(FATAL_ERROR "Fetching and compiling live555 failed!")
+    endif()
+endif()
+FILE(GLOB LIVESOURCE ${LIVE}/groupsock/*.c* ${LIVE}/liveMedia/*.c* ${LIVE}/UsageEnvironment/*.c* ${LIVE}/BasicUsageEnvironment/*.c*)
+add_definitions(${LIVE555CFLAGS})
+add_library (live555 STATIC ${LIVESOURCE})
+target_include_directories(live555 PUBLIC ${LIVE}/groupsock/include ${LIVE}/liveMedia/include ${LIVE}/UsageEnvironment/include ${LIVE}/BasicUsageEnvironment/include)
+target_link_libraries (${PROJECT_NAME} live555)
 
 #testing
 enable_testing()
@@ -116,18 +99,20 @@ if (SYSTEMD_FOUND)
 	message(STATUS "SystemD directory '${SYSTEMD_SERVICES_INSTALL_DIR}'")
 	
 	configure_file(v4l2rtspserver.service.in ${CMAKE_CURRENT_BINARY_DIR}/v4l2rtspserver.service @ONLY)
-        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/v4l2rtspserver.service DESTINATION ${SYSTEMD_SERVICES_INSTALL_DIR} COMPONENT data)
+        install(FILES ${CMAKE_CURRENT_BINARY_DIR}/v4l2rtspserver.service DESTINATION ${SYSTEMD_SERVICES_INSTALL_DIR})
 endif (SYSTEMD_FOUND)
 
 # package
-install (TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin COMPONENT bin)
+install (TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+install (FILES index.html DESTINATION share/${PROJECT_NAME}/)
+install (FILES hls.js/dist/hls.light.min.js DESTINATION share/${PROJECT_NAME}/hls.js/dist/)
 
 SET(CPACK_GENERATOR "DEB")
 SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "Michel Promonet") 
 SET(CPACK_PACKAGE_CONTACT "michel.promonet@free.fr") 
 SET(CPACK_SYSTEM_NAME ${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR})
 STRING(REGEX REPLACE ",$" "" CPACK_DEBIAN_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS}")
-set(CPACK_DEB_COMPONENT_INSTALL "ON")
+SET(CPACK_PACKAGING_INSTALL_PREFIX ${CMAKE_INSTALL_PREFIX})
 if(VERSION)
     SET(CPACK_PACKAGE_VERSION "${VERSION}")
 endif()

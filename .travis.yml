@@ -17,12 +17,10 @@ addons:
   apt:
     sources:
       - deadsnakes
-      - ubuntu-toolchain-r-test
     packages:
       - git
       - cmake 
       - liblog4cpp5-dev
-      - liblivemedia-dev
       - libasound2-dev
       - g++-mips-linux-gnu
 before_install:

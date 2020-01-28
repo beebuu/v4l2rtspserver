@@ -40,7 +40,7 @@
 #include "ServerMediaSubsession.h"
 #include "UnicastServerMediaSubsession.h"
 #include "MulticastServerMediaSubsession.h"
-#include "SegmentServerMediaSubsession.h"
+#include "TSServerMediaSubsession.h"
 #include "HTTPServer.h"
 
 #ifdef HAVE_ALSA
@@ -86,10 +86,10 @@ UserAuthenticationDatabase* createUserAuthenticationDatabase(const std::list<std
 // -----------------------------------------
 //    create RTSP server
 // -----------------------------------------
-RTSPServer* createRTSPServer(UsageEnvironment& env, unsigned short rtspPort, unsigned short rtspOverHTTPPort, int timeout, unsigned int hlsSegment, const std::list<std::string> & userPasswordList, const char* realm)
+RTSPServer* createRTSPServer(UsageEnvironment& env, unsigned short rtspPort, unsigned short rtspOverHTTPPort, int timeout, unsigned int hlsSegment, const std::list<std::string> & userPasswordList, const char* realm, const std::string & webroot)
 {
 	UserAuthenticationDatabase* auth = createUserAuthenticationDatabase(userPasswordList, realm);
-	RTSPServer* rtspServer = HTTPServer::createNew(env, rtspPort, auth, timeout, hlsSegment);
+	RTSPServer* rtspServer = HTTPServer::createNew(env, rtspPort, auth, timeout, hlsSegment, webroot);
 	if (rtspServer != NULL)
 	{
 		// set http tunneling
@@ -105,35 +105,20 @@ RTSPServer* createRTSPServer(UsageEnvironment& env, unsigned short rtspPort, uns
 // -----------------------------------------
 //    create FramedSource server
 // -----------------------------------------
-FramedSource* createFramedSource(UsageEnvironment* env, int format, DeviceInterface* videoCapture, int outfd, int queueSize, bool useThread, bool repeatConfig, MPEG2TransportStreamFromESSource* muxer)
+FramedSource* createFramedSource(UsageEnvironment* env, int format, DeviceInterface* videoCapture, int outfd, int queueSize, bool useThread, bool repeatConfig)
 {
-	bool muxTS = (muxer != NULL);
 	FramedSource* source = NULL;
 	if (format == V4L2_PIX_FMT_H264)
 	{
-		source = H264_V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread, repeatConfig, muxTS);
-		if (muxTS)
-		{
-			muxer->addNewVideoSource(source, 5);
-			source = muxer;
-		}
+		source = H264_V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread, repeatConfig, false);
 	}
 	else if (format == V4L2_PIX_FMT_HEVC)
 	{
-		source = H265_V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread, repeatConfig, muxTS);
-		if (muxTS)
-		{
-			muxer->addNewVideoSource(source, 6);
-			source = muxer;
-		}
-	}
-	else if (!muxTS)
-	{
-		source = V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread);
+		source = H265_V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread, repeatConfig, false);
 	}
 	else 
 	{
-		LOG(ERROR) << "TS in nor compatible with format";
+		source = V4L2DeviceSource::createNew(*env, videoCapture, outfd, queueSize, useThread);
 	}
 	return source;
 }
@@ -173,25 +158,19 @@ int addSession(RTSPServer* rtspServer, const std::string & sessionName, const st
 // -----------------------------------------
 //    convert V4L2 pix format to RTP mime
 // -----------------------------------------
-std::string getVideoRtpFormat(int format, bool muxTS)
+std::string getVideoRtpFormat(int format)
 {
 	std::string rtpFormat;
-	if (muxTS)
-	{
-		rtpFormat = "video/MP2T";
-	}
-	else
-	{
-		switch(format)
-		{	
-			case V4L2_PIX_FMT_HEVC : rtpFormat = "video/H265"; break;
-			case V4L2_PIX_FMT_H264 : rtpFormat = "video/H264"; break;
-			case V4L2_PIX_FMT_MJPEG: rtpFormat = "video/JPEG"; break;
-			case V4L2_PIX_FMT_JPEG : rtpFormat = "video/JPEG"; break;
-			case V4L2_PIX_FMT_VP8  : rtpFormat = "video/VP8" ; break;
-			case V4L2_PIX_FMT_VP9  : rtpFormat = "video/VP9" ; break;
-			case V4L2_PIX_FMT_YUYV : rtpFormat = "video/RAW" ; break;
-		}
+	switch(format)
+	{	
+		case V4L2_PIX_FMT_HEVC : rtpFormat = "video/H265"; break;
+		case V4L2_PIX_FMT_H264 : rtpFormat = "video/H264"; break;
+		case V4L2_PIX_FMT_MJPEG: rtpFormat = "video/JPEG"; break;
+		case V4L2_PIX_FMT_JPEG : rtpFormat = "video/JPEG"; break;
+		case V4L2_PIX_FMT_VP8  : rtpFormat = "video/VP8" ; break;
+		case V4L2_PIX_FMT_VP9  : rtpFormat = "video/VP9" ; break;
+		case V4L2_PIX_FMT_YUYV : rtpFormat = "video/RAW" ; break;
+		case V4L2_PIX_FMT_UYVY : rtpFormat = "video/RAW" ; break;
 	}
 	
 	return rtpFormat;
@@ -236,6 +215,8 @@ snd_pcm_format_t decodeAudioFormat(const std::string& fmt)
 		audioFmt = SND_PCM_FORMAT_MU_LAW;
 	} else if (fmt == "S8") {
 		audioFmt = SND_PCM_FORMAT_S8;
+	} else if (fmt == "MPEG") {
+		audioFmt = SND_PCM_FORMAT_MPEG;
 	}
 	return audioFmt;
 }
@@ -260,6 +241,9 @@ std::string getAudioRtpFormat(snd_pcm_format_t format, int sampleRate, int chann
 		case SND_PCM_FORMAT_S32_BE:
 		case SND_PCM_FORMAT_S32_LE:
 			os << "L32";
+			break;
+		case SND_PCM_FORMAT_MPEG:
+			os << "MPEG";
 			break;
 		default:
 			os << "L16";
@@ -424,17 +408,19 @@ int main(int argc, char** argv)
 	std::string outputFile;
 	V4l2Access::IoType ioTypeIn  = V4l2Access::IOTYPE_MMAP;
 	V4l2Access::IoType ioTypeOut = V4l2Access::IOTYPE_MMAP;
+	int openflags = O_RDWR | O_NONBLOCK; 
 	std::string url = "unicast";
 	std::string murl = "multicast";
+	std::string tsurl = "ts";
 	bool useThread = true;
 	std::string maddr;
 	bool repeatConfig = true;
 	int timeout = 65;
-	bool muxTS = false;
-	int defaultHlsSegment = 5;
+	int defaultHlsSegment = 2;
 	unsigned int hlsSegment = 0;
 	const char* realm = NULL;
 	std::list<std::string> userPasswordList;
+	std::string webroot;
 #ifdef HAVE_ALSA	
 	int audioFreq = 44100;
 	int audioNbChannels = 2;
@@ -448,13 +434,14 @@ int main(int argc, char** argv)
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "v::Q:O:" "I:P:p:m:u:M:ct:TS::" "R:U:" "rwsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
+	while ((c = getopt (argc, argv, "v::Q:O:b:" "I:P:p:m:u:M:ct:S::" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
 	{
 		switch (c)
 		{
 			case 'v':	verbose    = 1; if (optarg && *optarg=='v') verbose++;  break;
 			case 'Q':	queueSize  = atoi(optarg); break;
 			case 'O':	outputFile = optarg; break;
+			case 'b':	webroot = optarg; break;
 			
 			// RTSP/RTP
 			case 'I':       ReceivingInterfaceAddr  = inet_addr(optarg); break;
@@ -465,8 +452,7 @@ int main(int argc, char** argv)
 			case 'M':	multicast = true; maddr = optarg; break;
 			case 'c':	repeatConfig            = false; break;
 			case 't':	timeout                 = atoi(optarg); break;
-			case 'T':	muxTS                   = true; break;
-			case 'S':	hlsSegment              = optarg ? atoi(optarg) : defaultHlsSegment; muxTS=true; break;
+			case 'S':	hlsSegment              = optarg ? atoi(optarg) : defaultHlsSegment; break;
 			
 			// users
 			case 'R':       realm                   = optarg; break;
@@ -475,6 +461,7 @@ int main(int argc, char** argv)
 			// V4L2
 			case 'r':	ioTypeIn  = V4l2Access::IOTYPE_READWRITE; break;
 			case 'w':	ioTypeOut = V4l2Access::IOTYPE_READWRITE; break;	
+			case 'B':	openflags = O_RDWR; break;	
 			case 's':	useThread =  false; break;
 			case 'f':	format    = decodeVideoFormat(optarg); if (format) {videoformatList.push_back(format);};  break;
 			case 'F':	fps       = atoi(optarg); break;
@@ -506,6 +493,7 @@ int main(int argc, char** argv)
 				std::cout << "\t -vv              : very verbose"                                                                                     << std::endl;
 				std::cout << "\t -Q <length>      : Number of frame queue  (default "<< queueSize << ")"                                              << std::endl;
 				std::cout << "\t -O <output>      : Copy captured frame to a file or a V4L2 device"                                                   << std::endl;
+				std::cout << "\t -b <webroot>     : path to webroot" << std::endl;
 				
 				std::cout << "\t RTSP/RTP options"                                                                                           << std::endl;
 				std::cout << "\t -I <addr>        : RTSP interface (default autodetect)"                                                              << std::endl;
@@ -518,12 +506,12 @@ int main(int argc, char** argv)
 				std::cout << "\t -M <addr>        : multicast group:port (default is random_address:20000)"                                           << std::endl;
 				std::cout << "\t -c               : don't repeat config (default repeat config before IDR frame)"                                     << std::endl;
 				std::cout << "\t -t <timeout>     : RTCP expiration timeout in seconds (default " << timeout << ")"                                   << std::endl;
-				std::cout << "\t -T               : send Transport Stream instead of elementary Stream"                                               << std::endl;				
 				std::cout << "\t -S[<duration>]   : enable HLS & MPEG-DASH with segment duration  in seconds (default " << defaultHlsSegment << ")" << std::endl;
 				
 				std::cout << "\t V4L2 options"                                                                                               << std::endl;
 				std::cout << "\t -r               : V4L2 capture using read interface (default use memory mapped buffers)"                            << std::endl;
 				std::cout << "\t -w               : V4L2 capture using write interface (default use memory mapped buffers)"                           << std::endl;
+				std::cout << "\t -B               : V4L2 capture using blocking mode (default use non-blocking mode)"                                 << std::endl;
 				std::cout << "\t -s               : V4L2 capture using live555 mainloop (default use a reader thread)"                                << std::endl;
 				std::cout << "\t -f               : V4L2 capture using current capture format (-W,-H,-F are ignored)"                                 << std::endl;
 				std::cout << "\t -f<format>       : V4L2 capture using format (-W,-H,-F are used)"                                                    << std::endl;
@@ -560,6 +548,7 @@ int main(int argc, char** argv)
 	if ((videoformatList.empty()) && (format!=0)) {
 		videoformatList.push_back(V4L2_PIX_FMT_H264);
 		videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
+		videoformatList.push_back(V4L2_PIX_FMT_JPEG);
 	}
 
 #ifdef HAVE_ALSA	
@@ -586,7 +575,7 @@ int main(int argc, char** argv)
 	decodeMulticastUrl(maddr, destinationAddress, rtpPortNum, rtcpPortNum);	
 	
 	// create RTSP server
-	RTSPServer* rtspServer = createRTSPServer(*env, rtspPort, rtspOverHTTPPort, timeout, hlsSegment, userPasswordList, realm);
+	RTSPServer* rtspServer = createRTSPServer(*env, rtspPort, rtspOverHTTPPort, timeout, hlsSegment, userPasswordList, realm, webroot);
 	if (rtspServer == NULL) 
 	{
 		LOG(ERROR) << "Failed to create RTSP server: " << env->getResultMsg();
@@ -610,11 +599,6 @@ int main(int argc, char** argv)
 				baseUrl = getDeviceName(videoDev);
 				baseUrl.append("/");
 			}	
-			MPEG2TransportStreamFromESSource* muxer = NULL;
-			if (muxTS) 
-			{
-				muxer = MPEG2TransportStreamFromESSource::createNew(*env);
-			}
 			StreamReplicator* videoReplicator = NULL;
 			std::string rtpFormat;
 			if (!videoDev.empty())
@@ -622,7 +606,7 @@ int main(int argc, char** argv)
 				// Init video capture
 				LOG(NOTICE) << "Create V4L2 Source..." << videoDev;
 				
-				V4L2DeviceParameters param(videoDev.c_str(), videoformatList, width, height, fps, verbose);
+				V4L2DeviceParameters param(videoDev.c_str(), videoformatList, width, height, fps, verbose, openflags);
 				V4l2Capture* videoCapture = V4l2Capture::create(param, ioTypeIn);
 				if (videoCapture)
 				{
@@ -638,13 +622,13 @@ int main(int argc, char** argv)
 						}
 					}
 					
-					rtpFormat.assign(getVideoRtpFormat(videoCapture->getFormat(), muxTS));
+					rtpFormat.assign(getVideoRtpFormat(videoCapture->getFormat()));
 					if (rtpFormat.empty()) {
 						LOG(FATAL) << "No Streaming format supported for device " << videoDev;
 						delete videoCapture;
 					} else {
 						LOG(NOTICE) << "Create Source ..." << videoDev;
-						FramedSource* videoSource = createFramedSource(env, videoCapture->getFormat(), new DeviceCaptureAccess<V4l2Capture>(videoCapture), outfd, queueSize, useThread, repeatConfig, muxer);
+						FramedSource* videoSource = createFramedSource(env, videoCapture->getFormat(), new DeviceCaptureAccess<V4l2Capture>(videoCapture), outfd, queueSize, useThread, repeatConfig);
 						if (videoSource == NULL) 
 						{
 							LOG(FATAL) << "Unable to create source for device " << videoDev;
@@ -726,34 +710,34 @@ int main(int argc, char** argv)
 				}
 				nbSource += addSession(rtspServer, baseUrl+murl, subSession);																
 			}
-			// Create Unicast Session					
+			
+			// Create HLS Session					
 			if (hlsSegment > 0)
 			{
 				std::list<ServerMediaSubsession*> subSession;
 				if (videoReplicator)
 				{
-					subSession.push_back(HLSServerMediaSubsession::createNew(*env, videoReplicator, rtpFormat, hlsSegment));				
+					subSession.push_back(TSServerMediaSubsession::createNew(*env, videoReplicator, rtpFormat, audioReplicator, rtpAudioFormat, hlsSegment));				
 				}
-				nbSource += addSession(rtspServer, baseUrl+url, subSession);
+				nbSource += addSession(rtspServer, baseUrl+tsurl, subSession);
 				
 				struct in_addr ip;
 				ip.s_addr = ourIPAddress(*env);
-				LOG(NOTICE) << "HLS       http://" << inet_ntoa(ip) << ":" << rtspPort << "/" << baseUrl+url << ".m3u8";
-				LOG(NOTICE) << "MPEG-DASH http://" << inet_ntoa(ip) << ":" << rtspPort << "/" << baseUrl+url << ".mpd";
+				LOG(NOTICE) << "HLS       http://" << inet_ntoa(ip) << ":" << rtspPort << "/" << baseUrl+tsurl << ".m3u8";
+				LOG(NOTICE) << "MPEG-DASH http://" << inet_ntoa(ip) << ":" << rtspPort << "/" << baseUrl+tsurl << ".mpd";
 			}
-			else
+			
+			// Create Unicast Session					
+			std::list<ServerMediaSubsession*> subSession;
+			if (videoReplicator)
 			{
-				std::list<ServerMediaSubsession*> subSession;
-				if (videoReplicator)
-				{
-					subSession.push_back(UnicastServerMediaSubsession::createNew(*env, videoReplicator, rtpFormat));				
-				}
-				if (audioReplicator)
-				{
-					subSession.push_back(UnicastServerMediaSubsession::createNew(*env, audioReplicator, rtpAudioFormat));				
-				}
-				nbSource += addSession(rtspServer, baseUrl+url, subSession);				
+				subSession.push_back(UnicastServerMediaSubsession::createNew(*env, videoReplicator, rtpFormat));				
 			}
+			if (audioReplicator)
+			{
+				subSession.push_back(UnicastServerMediaSubsession::createNew(*env, audioReplicator, rtpAudioFormat));				
+			}
+			nbSource += addSession(rtspServer, baseUrl+url, subSession);				
 		}
 
 		if (nbSource>0)

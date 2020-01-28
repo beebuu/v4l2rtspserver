@@ -1,17 +1,17 @@
-FROM heroku/heroku:16
+FROM ubuntu:18.04 as builder
 LABEL maintainer michel.promonet@free.fr
-
 WORKDIR /v4l2rtspserver
-ADD . /v4l2rtspserver
+COPY . /v4l2rtspserver
 
-RUN git clone --depth 1 https://github.com/mpromonet/v4l2tools.git
-RUN apt-get update && apt-get install -y --no-install-recommends g++ autoconf automake libtool xz-utils cmake liblivemedia-dev liblog4cpp5-dev libx264-dev libjpeg-dev v4l2loopback-dkms 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates g++ autoconf automake libtool xz-utils cmake make pkg-config git wget \
+    && cmake . && make install && apt-get clean && rm -rf /var/lib/apt/lists/
 
-RUN cmake . && make \
-	&& make -C v4l2tools \
-	&& apt-get clean
+FROM ubuntu:18.04
+WORKDIR /usr/local/share/v4l2rtspserver
+COPY --from=builder /usr/local/bin/ /usr/local/bin/
+COPY --from=builder /usr/local/share/v4l2rtspserver/ /usr/local/share/v4l2rtspserver/
 
 EXPOSE 8554
-
-ENTRYPOINT [ "./v4l2rtspserver" ]
-CMD [ "-S -P ${PORT}" ]
+ENTRYPOINT [ "/usr/local/bin/v4l2rtspserver" ]
+CMD [ "-S" ]

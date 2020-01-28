@@ -45,29 +45,38 @@ void MJPEGVideoSource::afterGettingFrame(unsigned frameSize,unsigned numTruncate
 		i+=length+2;
 	    }
 	    // DQT
-	    else if ( ( (i+5+64) < frameSize)  && (fTo[i] == 0xFF) && (fTo[i+1] == 0xDB)) {
+	    else if (((i+5) < frameSize) && (fTo[i] == 0xFF) && (fTo[i+1] == 0xDB)) {
 		int length = (fTo[i+2]<<8)|(fTo[i+3]);		    
 		LOG(DEBUG) << "DQT length:" << length;
 
 		unsigned int precision = (fTo[i+4]&0xf0)<<4;
 		unsigned int quantIdx  = fTo[i+4]&0x0f;
-		unsigned int quantSize = length-4;
+		unsigned int quantSize =  64*(precision+1);
 		if (quantSize*quantIdx+quantSize <= sizeof(m_qTable)) {
-		    memcpy(m_qTable + quantSize*quantIdx, fTo + i + 5, quantSize);
-		    LOG(DEBUG) << "Quantization table idx:" << quantIdx << " precision:" << precision << " size:" << quantSize << " total size:" << m_qTableSize;
-		    if (quantSize*quantIdx+quantSize > m_qTableSize) {
-			m_qTableSize = quantSize*quantIdx+quantSize;
+		    if ( (i+2+length) < frameSize) {
+		    	memcpy(m_qTable + quantSize*quantIdx, fTo + i + 5, length-3);
+		    	LOG(DEBUG) << "Quantization table idx:" << quantIdx << " precision:" << precision << " size:" << quantSize << " total size:" << m_qTableSize;
+		    	if (quantSize*quantIdx+quantSize > m_qTableSize) {
+				m_qTableSize = quantSize*quantIdx+quantSize;
+		    	}
 		    }
 		}
 
 		i+=length+2;	       
 	    }
 	    // SOS
-	    else if ( ((i+1) < frameSize) && (fTo[i] == 0xFF) && (fTo[i+1] == 0xDA) ) {            
+	    else if ( ((i+3) < frameSize) && (fTo[i] == 0xFF) && (fTo[i+1] == 0xDA) ) {            
 		int length = (fTo[i+2]<<8)|(fTo[i+3]);		    
 		LOG(DEBUG) << "SOS length:" << length;                
 		
 		headerSize = i+length+2;                
+            // DRI
+	    } else if ( ((i+5) < frameSize) && (fTo[i] == 0xFF) && (fTo[i+1] == 0xDD) ) {
+		m_type |= 0x40;
+		int length = (fTo[i+2]<<8)|(fTo[i+3]);		    
+		m_restartInterval = (fTo[i+4]<<8)|(fTo[i+5]);
+		LOG(DEBUG) << "DRI restartInterval:" << m_restartInterval;                
+		i+=length+2;	       
 	    } else {
 		i++;
 	    }
